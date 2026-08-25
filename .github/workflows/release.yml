@@ -1,0 +1,83 @@
+name: Release & Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag Name (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: ''
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'macos-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Tauri Desktop App & Create GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name || github.event.inputs.release_tag || 'v1.0.0' }}
+          releaseName: 'ScrcpyHub ${{ github.ref_name || github.event.inputs.release_tag || \"v1.0.0\" }}'
+          releaseBody: |
+            ### 🚀 ScrcpyHub Release ${{ github.ref_name || github.event.inputs.release_tag || 'v1.0.0' }}
+            
+            Modern Neo-Brutalist GUI Controller for Android Scrcpy & ADB.
+            
+            #### 📦 Download Assets:
+            - **Windows**: `.exe` Installer / Portable `.exe`
+            - **macOS**: `.dmg` Disk Image (Apple Silicon & Intel)
+            - **Linux**: `.AppImage` / `.deb` Package
+            
+            #### ✨ Highlights:
+            - 1-Click Engine Auto-Installer (scrcpy & adb)
+            - Android 11+ Wireless Pairing & 1-Click USB -> Wi-Fi TCP/IP Switch
+            - Performance Streaming Presets (Gaming 0ms, Balanced 1080p, Battery Saver)
+            - Full Hardware Controls & APK drag-and-drop installer
+            - Real-time Log Console Drawer
+          releaseDraft: false
+          prerelease: false
