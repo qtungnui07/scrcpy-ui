@@ -20,7 +20,7 @@ export default defineConfig({
     host: "127.0.0.1",
     watch: {
       // 3. tell vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/scrcpy-win64-*/**"],
     },
   },
 });

@@ -64,7 +64,9 @@ pub async fn launch_scrcpy_session(
     custom_args: Vec<String>,
 ) -> Result<ScrcpySession, String> {
     let scrcpy_path = resolve_binary("scrcpy").ok_or_else(|| {
-        "scrcpy binary not found! Please make sure it is downloaded or in PATH.".to_string()
+        let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+        let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+        format!("scrcpy binary not found! cwd={}, exe={}", cwd, exe)
     })?;
 
     // Build args list
