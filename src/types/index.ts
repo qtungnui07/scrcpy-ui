@@ -31,6 +31,7 @@ export interface BinaryStatus {
   adb_version: string | null;
   is_ready: boolean;
   bin_dir: string;
+  installed_tag: string | null;
 }
 
 export interface ReleaseInfo {
@@ -43,6 +44,14 @@ export interface ReleaseInfo {
 }
 
 export type u64_number = number;
+
+export interface UpdateCheckResult {
+  needs_update: boolean;
+  installed_tag: string | null;
+  latest_tag: string | null;
+  auto_downloading: boolean;
+  message: string;
+}
 
 export interface DownloadProgressPayload {
   stage: "fetching" | "downloading" | "extracting" | "finished" | "error";

@@ -14,6 +14,7 @@ pub fn run() {
             commands::downloader::get_binary_status,
             commands::downloader::check_latest_release,
             commands::downloader::download_and_extract_engine,
+            commands::downloader::check_and_auto_update,
             // ADB commands
             commands::adb::get_adb_devices,
             commands::adb::pair_wireless_device,

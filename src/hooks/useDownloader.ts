@@ -1,7 +1,7 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { BinaryStatus, ReleaseInfo, DownloadProgressPayload } from "../types";
+import { BinaryStatus, ReleaseInfo, DownloadProgressPayload, UpdateCheckResult } from "../types";
 import { useAppStore } from "../stores/appStore";
 
 export function useDownloader() {
@@ -104,8 +104,69 @@ export function useDownloader() {
     [setIsDownloading, setDownloadProgress, setBinaryStatus, addNotification, addLog]
   );
 
+  const checkAndAutoUpdate = useCallback(async () => {
+    try {
+      setIsDownloading(true);
+      addLog({
+        session_id: "system",
+        serial: "system",
+        level: "info",
+        message: "Checking for scrcpy engine updates...",
+        timestamp: new Date().toISOString(),
+      });
+
+      const result = await invoke<UpdateCheckResult>("check_and_auto_update");
+
+      addLog({
+        session_id: "system",
+        serial: "system",
+        level: "info",
+        message: result.message,
+        timestamp: new Date().toISOString(),
+      });
+
+      if (!result.needs_update) {
+        if (result.latest_tag && result.installed_tag !== result.latest_tag) {
+          addNotification({
+            type: "success",
+            title: "Engine Updated",
+            message: `scrcpy updated to ${result.latest_tag}`,
+          });
+        }
+      } else {
+        addNotification({
+          type: "warning",
+          title: "Update Available",
+          message: result.message,
+        });
+      }
+
+      // Refresh binary status after check
+      await fetchStatus();
+    } catch (err: any) {
+      addLog({
+        session_id: "system",
+        serial: "system",
+        level: "error",
+        message: `Auto-update check failed: ${err}`,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setIsDownloading(false);
+      setDownloadProgress(null);
+    }
+  }, [setIsDownloading, setDownloadProgress, addNotification, addLog, fetchStatus]);
+
+  const hasCheckedRef = useRef(false);
+
   useEffect(() => {
     fetchStatus();
+
+    // Auto-check for updates on first mount
+    if (!hasCheckedRef.current) {
+      hasCheckedRef.current = true;
+      checkAndAutoUpdate();
+    }
 
     // Listen to download progress event from Rust
     const unlistenPromise = listen<DownloadProgressPayload>("download-progress", (event) => {
@@ -118,7 +179,7 @@ export function useDownloader() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [fetchStatus, setDownloadProgress, setIsDownloading]);
+  }, [fetchStatus, checkAndAutoUpdate, setDownloadProgress, setIsDownloading]);
 
   return {
     binaryStatus,
@@ -128,5 +189,6 @@ export function useDownloader() {
     fetchStatus,
     checkLatest,
     downloadEngine,
+    checkAndAutoUpdate,
   };
 }

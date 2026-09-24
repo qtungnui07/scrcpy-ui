@@ -15,6 +15,7 @@ pub struct BinaryStatus {
     pub adb_version: Option<String>,
     pub is_ready: bool,
     pub bin_dir: String,
+    pub installed_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +34,15 @@ pub struct DownloadProgressPayload {
     pub progress: f64, // 0.0 - 100.0
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCheckResult {
+    pub needs_update: bool,
+    pub installed_tag: Option<String>,
+    pub latest_tag: Option<String>,
+    pub auto_downloading: bool,
     pub message: String,
 }
 
@@ -72,6 +82,7 @@ pub async fn get_binary_status() -> Result<BinaryStatus, String> {
     });
 
     let is_ready = scrcpy_path.is_some() && adb_path.is_some();
+    let installed_tag = read_installed_tag(&bin_dir);
 
     Ok(BinaryStatus {
         scrcpy_path: scrcpy_path.map(|p| p.to_string_lossy().to_string()),
@@ -80,6 +91,7 @@ pub async fn get_binary_status() -> Result<BinaryStatus, String> {
         adb_version,
         is_ready,
         bin_dir: bin_dir.to_string_lossy().to_string(),
+        installed_tag,
     })
 }
 
@@ -316,4 +328,93 @@ fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<(), String> {
     let mut archive = Archive::new(tar);
     archive.unpack(target_dir).map_err(|e| format!("Failed to unpack tar.gz: {}", e))?;
     Ok(())
+}
+
+fn save_installed_tag(bin_dir: &Path, tag: &str) {
+    let version_file = bin_dir.join(".scrcpy_version");
+    let _ = fs::write(version_file, tag);
+}
+
+fn read_installed_tag(bin_dir: &Path) -> Option<String> {
+    let version_file = bin_dir.join(".scrcpy_version");
+    fs::read_to_string(version_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[tauri::command]
+pub async fn check_and_auto_update(app: AppHandle) -> Result<UpdateCheckResult, String> {
+    let bin_dir = get_bin_dir();
+    let installed_tag = read_installed_tag(&bin_dir);
+    let has_scrcpy = resolve_binary("scrcpy").is_some();
+
+    // If scrcpy binary exists and we have a version tag, check for updates
+    // If no binary at all, force download
+    let latest = match check_latest_release().await {
+        Ok(r) => r,
+        Err(e) => {
+            if !has_scrcpy {
+                return Ok(UpdateCheckResult {
+                    needs_update: true,
+                    installed_tag: installed_tag.clone(),
+                    latest_tag: None,
+                    auto_downloading: false,
+                    message: format!("No scrcpy found and cannot check updates: {}", e),
+                });
+            }
+            return Ok(UpdateCheckResult {
+                needs_update: false,
+                installed_tag,
+                latest_tag: None,
+                auto_downloading: false,
+                message: format!("Offline, using existing binaries. ({})", e),
+            });
+        }
+    };
+
+    let latest_tag = latest.tag_name.clone();
+    let needs_update = !has_scrcpy || installed_tag.as_deref() != Some(&latest_tag);
+
+    if needs_update {
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgressPayload {
+                stage: "fetching".into(),
+                progress: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                message: format!(
+                    "Auto-updating scrcpy to {}...",
+                    latest_tag
+                ),
+            },
+        );
+
+        let tag_for_save = latest_tag.clone();
+        match download_and_extract_engine(app, Some(latest.download_url)).await {
+            Ok(_) => {
+                save_installed_tag(&get_bin_dir(), &tag_for_save);
+                Ok(UpdateCheckResult {
+                    needs_update: false,
+                    installed_tag: Some(tag_for_save.clone()),
+                    latest_tag: Some(tag_for_save),
+                    auto_downloading: false,
+                    message: "scrcpy updated successfully!".into(),
+                })
+            }
+            Err(e) => Ok(UpdateCheckResult {
+                needs_update: true,
+                installed_tag,
+                latest_tag: Some(latest_tag),
+                auto_downloading: false,
+                message: format!("Auto-update failed: {}", e),
+            }),
+        }
+    } else {
+        Ok(UpdateCheckResult {
+            needs_update: false,
+            installed_tag,
+            latest_tag: Some(latest_tag),
+            auto_downloading: false,
+            message: "scrcpy is up to date.".into(),
+        })
+    }
 }
