@@ -1,6 +1,7 @@
 import React from "react";
 import { useAppStore } from "./stores/appStore";
 import { useDownloader } from "./hooks/useDownloader";
+import { useAdb } from "./hooks/useAdb";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DashboardView } from "./components/dashboard/DashboardView";
 import { DevicesView } from "./components/devices/DevicesView";
@@ -14,6 +15,7 @@ import { NotificationToastContainer } from "./components/ui/NotificationToast";
 export const App: React.FC = () => {
   const { activeTab } = useAppStore();
   useDownloader(); // auto-check for scrcpy updates on startup
+  useAdb({ poll: true }); // the sole owner of background ADB discovery
 
   return (
     <div className="flex h-screen bg-[#F9F9F7] text-[#1A1C1B] font-['Space_Grotesk',sans-serif] overflow-hidden select-none">

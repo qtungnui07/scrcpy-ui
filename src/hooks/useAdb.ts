@@ -4,7 +4,14 @@ import { AdbDevice, CommandOutput } from "../types";
 import { useDeviceStore } from "../stores/deviceStore";
 import { useAppStore } from "../stores/appStore";
 
-export function useAdb() {
+const DEVICE_POLL_INTERVAL_MS = 5000;
+
+interface UseAdbOptions {
+  /** Keep polling in exactly one app-level owner; consumers only use the shared store. */
+  poll?: boolean;
+}
+
+export function useAdb({ poll = false }: UseAdbOptions = {}) {
   const {
     devices,
     selectedSerial,
@@ -33,9 +40,11 @@ export function useAdb() {
     }
   }, [binaryStatus?.adb_path, setDevices]);
 
-  // Polling loop every 2 seconds
+  // Device discovery must have a single owner. Several screens (and the always-mounted
+  // wireless dialog) use this hook, so polling from every hook instance floods ADB while
+  // a wireless scrcpy session is active.
   useEffect(() => {
-    if (!isPollingActive || !binaryStatus?.adb_path) return;
+    if (!poll || !isPollingActive || !binaryStatus?.adb_path) return;
 
     const interval = setInterval(async () => {
       if (isPollingRef.current) return;
@@ -45,13 +54,13 @@ export function useAdb() {
       } finally {
         isPollingRef.current = false;
       }
-    }, 2000);
+    }, DEVICE_POLL_INTERVAL_MS);
 
     // Initial immediate fetch
     refreshDevices();
 
     return () => clearInterval(interval);
-  }, [isPollingActive, binaryStatus?.adb_path, refreshDevices]);
+  }, [poll, isPollingActive, binaryStatus?.adb_path, refreshDevices]);
 
   const pairDevice = useCallback(
     async (ip: string, port: number, code: string) => {

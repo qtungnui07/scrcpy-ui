@@ -149,9 +149,14 @@ export const DeviceCard: React.FC<DeviceCardProps> = ({ device, isSelected }) =>
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
                 {getStatusBadge()}
 
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-muted/60 text-muted-foreground border border-border/40">
-                  {isUsb ? <Usb className="w-3 h-3 text-sky-400" /> : <Wifi className="w-3 h-3 text-indigo-400" />}
-                  {device.connection_type}
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black uppercase border-[2px] border-black shadow-[2px_2px_0px_#000000]",
+                    isUsb ? "bg-[#D9FFD0] text-[#086E00]" : "bg-[#DCE9FF] text-[#1D4ED8]"
+                  )}
+                >
+                  {isUsb ? <Usb className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
+                  {isUsb ? "USB • WIRED" : "WI-FI • TCP/IP"}
                 </span>
 
                 {device.battery_level !== undefined && device.battery_level !== null && (

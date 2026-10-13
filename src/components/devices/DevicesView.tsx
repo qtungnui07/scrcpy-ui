@@ -52,7 +52,7 @@ export const DevicesView: React.FC = () => {
     <div className="space-y-8">
       {/* Header */}
       <div className="space-y-1">
-        <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B] drop-shadow-[3px_3px_0px_#000000]">
+        <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B]">
           Device Management
         </h1>
         <p className="text-sm font-semibold text-[#4E4633] max-w-2xl">
@@ -151,8 +151,13 @@ export const DevicesView: React.FC = () => {
                   </div>
 
                   <div className="col-span-2">
-                    <span className="inline-flex items-center gap-1 font-extrabold text-[11px] uppercase bg-white border-[2px] border-black px-2.5 py-0.5 rounded-md shadow-[2px_2px_0px_#000000]">
-                      {isUsb ? "USB Wired" : "Wi-Fi TCP/IP"}
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 font-black text-[11px] uppercase border-[2px] border-black px-2.5 py-1 rounded-md shadow-[2px_2px_0px_#000000]",
+                        isUsb ? "bg-[#D9FFD0] text-[#086E00]" : "bg-[#DCE9FF] text-[#1D4ED8]"
+                      )}
+                    >
+                      {isUsb ? "USB • WIRED" : "WI-FI • TCP/IP"}
                     </span>
                   </div>
 

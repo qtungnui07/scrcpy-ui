@@ -35,7 +35,7 @@ export const DashboardView: React.FC = () => {
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B] drop-shadow-[3px_3px_0px_#000000]">
+          <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B]">
             Connected Devices
           </h1>
           <p className="text-sm font-semibold text-[#4E4633] mt-1">
@@ -139,16 +139,26 @@ export const DashboardView: React.FC = () => {
                   </div>
 
                   {/* Connection Tag */}
-                  <div className="flex items-center gap-2 font-bold text-xs uppercase bg-[#F9F9F7] border-[2.5px] border-black px-3 py-1 rounded-lg w-fit shadow-[2px_2px_0px_#000000]">
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 font-black text-xs uppercase border-[2.5px] border-black px-3 py-1.5 rounded-lg w-fit shadow-[2px_2px_0px_#000000]",
+                      isUsb ? "bg-[#D9FFD0] text-[#086E00]" : "bg-[#DCE9FF] text-[#1D4ED8]"
+                    )}
+                  >
                     {isUsb ? (
                       <>
-                        <Usb className="w-4 h-4 text-[#086E00]" />
-                        <span>USB Connected</span>
+                        <Usb className="w-4 h-4" />
+                        <span>USB • WIRED</span>
                       </>
                     ) : (
                       <>
-                        <Wifi className="w-4 h-4 text-[#705900]" />
-                        <span>Wi-Fi {device.ip_address || "Wireless"}</span>
+                        <Wifi className="w-4 h-4" />
+                        <span>WI-FI • TCP/IP</span>
+                        {device.ip_address && (
+                          <span className="font-mono text-[10px] normal-case text-[#1E40AF]">
+                            {device.ip_address}
+                          </span>
+                        )}
                       </>
                     )}
                   </div>

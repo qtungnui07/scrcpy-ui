@@ -57,7 +57,7 @@ pub async fn get_adb_devices() -> Result<Vec<AdbDevice>, String> {
     let product_re = Regex::new(r"product:([^\s]+)").unwrap();
     let device_re = Regex::new(r"device:([^\s]+)").unwrap();
     let transport_re = Regex::new(r"transport_id:([^\s]+)").unwrap();
-    let ip_port_re = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+").unwrap();
+    let ip_port_re = Regex::new(r"^(\d{1,3}(?:\.\d{1,3}){3}):\d+$").unwrap();
 
     for line in lines {
         let line = line.trim();
@@ -77,30 +77,28 @@ pub async fn get_adb_devices() -> Result<Vec<AdbDevice>, String> {
             "unknown".to_string()
         };
 
-        let is_wireless = ip_port_re.is_match(&serial) || serial.contains(':');
+        // Legacy TCP/IP devices use `192.168.x.x:5555`; Android 11+ Wireless
+        // Debugging uses an mDNS serial such as `adb-<id>._adb-tls-connect._tcp`.
+        // Both must be shown as Wi-Fi instead of falling back to USB.
+        let is_wireless = ip_port_re.is_match(&serial)
+            || serial.contains(':')
+            || serial.starts_with("adb-")
+            || serial.contains("_adb-tls-connect")
+            || serial.contains("_adb-tls-pairing");
         let connection_type = if is_wireless {
             "Wireless".to_string()
         } else {
             "USB".to_string()
         };
 
-        let ip_address = if is_wireless {
-            serial.split(':').next().map(|s| s.to_string())
-        } else {
-            None
-        };
+        let ip_address = ip_port_re
+            .captures(&serial)
+            .map(|caps| caps[1].to_string());
 
         let model = model_re.captures(line).map(|c| c[1].replace('_', " "));
         let product = product_re.captures(line).map(|c| c[1].to_string());
         let device = device_re.captures(line).map(|c| c[1].to_string());
         let transport_id = transport_re.captures(line).map(|c| c[1].to_string());
-
-        // For connected devices, attempt a quick battery query if state is "device"
-        let battery_level = if state == "device" {
-            get_battery_level_internal(&serial).ok()
-        } else {
-            None
-        };
 
         devices.push(AdbDevice {
             serial,
@@ -111,26 +109,14 @@ pub async fn get_adb_devices() -> Result<Vec<AdbDevice>, String> {
             transport_id,
             connection_type,
             ip_address,
-            battery_level,
+            // Keep device discovery to one lightweight `adb devices -l` command. Running
+            // a shell command per device on every refresh competes with a wireless scrcpy
+            // stream and can make an otherwise healthy ADB-over-Wi-Fi connection unstable.
+            battery_level: None,
         });
     }
 
     Ok(devices)
-}
-
-fn get_battery_level_internal(serial: &str) -> Result<u32, String> {
-    let mut cmd = get_adb_command()?;
-    cmd.args(["-s", serial, "shell", "dumpsys", "battery"]);
-    let output = cmd.output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    let level_re = Regex::new(r"level:\s*(\d+)").unwrap();
-    if let Some(caps) = level_re.captures(&stdout) {
-        if let Ok(level) = caps[1].parse::<u32>() {
-            return Ok(level);
-        }
-    }
-    Err("Failed to parse battery level".into())
 }
 
 #[tauri::command]

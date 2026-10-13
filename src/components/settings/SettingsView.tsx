@@ -89,7 +89,7 @@ export const SettingsView: React.FC = () => {
     <div className="space-y-8">
       {/* Header */}
       <div className="space-y-1">
-        <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B] drop-shadow-[3px_3px_0px_#000000]">
+        <h1 className="text-4xl font-extrabold uppercase tracking-tight text-[#1A1C1B]">
           Global Settings
         </h1>
         <p className="text-sm font-semibold text-[#4E4633]">

@@ -29,7 +29,7 @@ export const Sidebar: React.FC = () => {
       {/* Brand Header */}
       <div className="p-6 border-b-[3px] border-black bg-[#FFD027]">
         <div className="flex items-center justify-between">
-          <span className="font-extrabold text-3xl tracking-tighter uppercase text-[#1A1C1B] drop-shadow-[3px_3px_0px_#000000]">
+          <span className="font-extrabold text-3xl tracking-tighter uppercase text-[#1A1C1B]">
             SCRCPY
           </span>
           <span className="px-2 py-0.5 text-xs font-bold bg-black text-white rounded-md uppercase">
