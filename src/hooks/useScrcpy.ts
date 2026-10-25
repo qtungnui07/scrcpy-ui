@@ -1,34 +1,139 @@
-import { useEffect, useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ScrcpySession, LogEntry, ActionResult } from "../types";
+import { AdbDevice, ScrcpySession, LogEntry, ActionResult } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { useConfigStore } from "../stores/configStore";
 import { useDeviceStore } from "../stores/deviceStore";
 
+const RELAUNCH_MAX_ATTEMPTS = 5;
+const RELAUNCH_BASE_DELAY_MS = 5000;
+/** Sessions that die younger than this never established a working stream;
+ * relaunching would just replay a launch failure (bad args, unauthorized, ...). */
+const RELAUNCH_MIN_RUNTIME_MS = 10000;
+
+// Session ids stopped through the app (Stop button / Stop All). Module-level so
+// every useScrcpy()/useSessionEvents() instance shares the same bookkeeping —
+// the stop may run in one component while the status event lands in another.
+const userStoppedSessions = new Set<string>();
+
+/** Launches a scrcpy session without any hook/closure state, so it is safe to
+ * call from timers and event listeners. Mirrors launchSession() behavior. */
+async function launchSessionDirect(
+  serial: string,
+  customArgs: string[]
+): Promise<ScrcpySession | null> {
+  const store = useAppStore.getState();
+  const sessionId = `session-${serial.replace(/[:.]/g, "-")}-${Date.now()}`;
+
+  store.addLog({
+    session_id: sessionId,
+    serial,
+    level: "info",
+    message: `Launching scrcpy: scrcpy -s ${serial} ${customArgs.join(" ")}`,
+    timestamp: new Date().toISOString(),
+  });
+
+  try {
+    const session = await invoke<ScrcpySession>("launch_scrcpy_session", {
+      sessionId,
+      serial,
+      customArgs,
+    });
+
+    store.addSession(session);
+    store.addNotification({
+      type: "success",
+      title: "Mirroring Started",
+      message: `Scrcpy session launched for ${serial}`,
+    });
+    return session;
+  } catch (err: any) {
+    store.addNotification({
+      type: "error",
+      title: "Launch Failed",
+      message: String(err),
+    });
+    store.addLog({
+      session_id: sessionId,
+      serial,
+      level: "error",
+      message: `Launch error: ${err}`,
+      timestamp: new Date().toISOString(),
+    });
+    return null;
+  }
+}
+
+/**
+ * Restores a mirroring session that died unexpectedly (device/network drop).
+ * Waits for the device to report `device` state again before relaunching with
+ * the exact same scrcpy args, with a capped number of attempts so a device
+ * that never comes back does not retry forever.
+ */
+function scheduleSessionRelaunch(serial: string, customArgs: string[], attempt: number) {
+  window.setTimeout(async () => {
+    const store = useAppStore.getState();
+    store.addLog({
+      session_id: "adb",
+      serial,
+      level: "info",
+      message: `Attempting to restore mirroring session (attempt ${attempt}/${RELAUNCH_MAX_ATTEMPTS})...`,
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      const devs = await invoke<AdbDevice[]>("get_adb_devices");
+      // Sync the shared store so the rest of the UI sees fresh device state.
+      useDeviceStore.getState().setDevices(devs);
+
+      const dev = devs.find((d) => d.serial === serial);
+      if (dev && dev.state === "device") {
+        const session = await launchSessionDirect(serial, customArgs);
+        if (session) {
+          store.addLog({
+            session_id: session.id,
+            serial,
+            level: "info",
+            message: `Mirroring session restored for ${serial} after unexpected disconnect.`,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
+      if (attempt < RELAUNCH_MAX_ATTEMPTS) {
+        scheduleSessionRelaunch(serial, customArgs, attempt + 1);
+      } else {
+        store.addNotification({
+          type: "warning",
+          title: "Session Restore Failed",
+          message:
+            dev && dev.state !== "device"
+              ? `Device ${serial} did not come back online. Reconnect it and start mirroring manually.`
+              : `Could not restore the mirroring session for ${serial}.`,
+        });
+      }
+    } catch (err: any) {
+      if (attempt < RELAUNCH_MAX_ATTEMPTS) {
+        scheduleSessionRelaunch(serial, customArgs, attempt + 1);
+      } else {
+        store.addNotification({
+          type: "warning",
+          title: "Session Restore Failed",
+          message: `Could not restore the session for ${serial}: ${String(err)}`,
+        });
+      }
+    }
+  }, RELAUNCH_BASE_DELAY_MS * attempt);
+}
+
 export function useScrcpy() {
-  const {
-    activeSessions,
-    setActiveSessions,
-    addSession,
-    removeSession,
-    addLog,
-    addNotification,
-  } = useAppStore();
+  const { activeSessions, setActiveSessions, addSession, removeSession, addLog, addNotification } =
+    useAppStore();
 
   const { buildCliArgs } = useConfigStore();
   const { selectedSerial, devices } = useDeviceStore();
-
-  const fetchActiveSessions = useCallback(async () => {
-    try {
-      const list = await invoke<ScrcpySession[]>("get_active_sessions");
-      setActiveSessions(list);
-      return list;
-    } catch (e) {
-      console.warn("Failed to get active sessions:", e);
-      return [];
-    }
-  }, [setActiveSessions]);
 
   const launchSession = useCallback(
     async (targetSerial?: string, overrideArgs?: string[]) => {
@@ -53,51 +158,14 @@ export function useScrcpy() {
       }
 
       const customArgs = overrideArgs || buildCliArgs();
-      const sessionId = `session-${serial.replace(/[:.]/g, "-")}-${Date.now()}`;
-
-      addLog({
-        session_id: sessionId,
-        serial,
-        level: "info",
-        message: `Launching scrcpy: scrcpy -s ${serial} ${customArgs.join(" ")}`,
-        timestamp: new Date().toISOString(),
-      });
-
-      try {
-        const session = await invoke<ScrcpySession>("launch_scrcpy_session", {
-          sessionId,
-          serial,
-          customArgs,
-        });
-
-        addSession(session);
-        addNotification({
-          type: "success",
-          title: "Mirroring Started",
-          message: `Scrcpy session launched for ${serial}`,
-        });
-        return session;
-      } catch (err: any) {
-        addNotification({
-          type: "error",
-          title: "Launch Failed",
-          message: String(err),
-        });
-        addLog({
-          session_id: sessionId,
-          serial,
-          level: "error",
-          message: `Launch error: ${err}`,
-          timestamp: new Date().toISOString(),
-        });
-        return null;
-      }
+      return launchSessionDirect(serial, customArgs);
     },
     [selectedSerial, devices, buildCliArgs, addNotification, addSession, addLog]
   );
 
   const stopSession = useCallback(
     async (sessionId: string) => {
+      userStoppedSessions.add(sessionId);
       try {
         const success = await invoke<boolean>("stop_scrcpy_session", { sessionId });
         if (success) {
@@ -107,9 +175,12 @@ export function useScrcpy() {
             title: "Session Stopped",
             message: `Stopped scrcpy session`,
           });
+        } else {
+          userStoppedSessions.delete(sessionId);
         }
         return success;
       } catch (err: any) {
+        userStoppedSessions.delete(sessionId);
         addNotification({
           type: "error",
           title: "Stop Session Failed",
@@ -123,6 +194,9 @@ export function useScrcpy() {
 
   const stopAllSessions = useCallback(async () => {
     try {
+      for (const s of useAppStore.getState().activeSessions) {
+        userStoppedSessions.add(s.id);
+      }
       const count = await invoke<number>("stop_all_sessions");
       setActiveSessions([]);
       addNotification({
@@ -320,38 +394,6 @@ export function useScrcpy() {
     [addNotification, addLog]
   );
 
-  // Setup Event Listeners
-  useEffect(() => {
-    fetchActiveSessions();
-
-    const unlistenLogPromise = listen<Omit<LogEntry, "id">>("scrcpy-log", (event) => {
-      addLog(event.payload);
-    });
-
-    const unlistenStatusPromise = listen<{
-      session_id: string;
-      serial: string;
-      status: string;
-      exit_code?: number;
-      message?: string;
-    }>("session-status-changed", (event) => {
-      const { session_id, serial, status, message } = event.payload;
-      if (status === "stopped" || status === "error") {
-        removeSession(session_id);
-        addNotification({
-          type: status === "error" ? "error" : "info",
-          title: `Session ${status === "error" ? "Error" : "Finished"}`,
-          message: message || `Session for ${serial} ended.`,
-        });
-      }
-    });
-
-    return () => {
-      unlistenLogPromise.then((u) => u());
-      unlistenStatusPromise.then((u) => u());
-    };
-  }, [fetchActiveSessions, addLog, removeSession, addNotification]);
-
   return {
     activeSessions,
     launchSession,
@@ -363,4 +405,81 @@ export function useScrcpy() {
     installApk,
     pushFile,
   };
+}
+
+/**
+ * App-level event wiring. Mount ONCE (App.tsx) — every instance would duplicate
+ * log entries, notifications, and auto-relaunches because Tauri events fan out
+ * to all registered listeners.
+ */
+export function useSessionEvents() {
+  useEffect(() => {
+    const fetchActiveSessions = async () => {
+      try {
+        const list = await invoke<ScrcpySession[]>("get_active_sessions");
+        useAppStore.getState().setActiveSessions(list);
+      } catch (e) {
+        console.warn("Failed to get active sessions:", e);
+      }
+    };
+
+    fetchActiveSessions();
+
+    const unlistenLogPromise = listen<Omit<LogEntry, "id">>("scrcpy-log", (event) => {
+      useAppStore.getState().addLog(event.payload);
+    });
+
+    const unlistenStatusPromise = listen<{
+      session_id: string;
+      serial: string;
+      status: string;
+      exit_code?: number;
+      message?: string;
+    }>("session-status-changed", (event) => {
+      const { session_id, serial, status, exit_code, message } = event.payload;
+      const store = useAppStore.getState();
+      if (status === "stopped" || status === "error") {
+        const wasUserStopped = userStoppedSessions.has(session_id);
+        userStoppedSessions.delete(session_id);
+
+        // Look up the dead session before removing it: its stored args are
+        // what the relaunch replays, even if the user has since changed config.
+        const original = store.activeSessions.find((s) => s.id === session_id);
+        store.removeSession(session_id);
+
+        const ranLongEnough =
+          !!original && Date.now() - new Date(original.start_time).getTime() > RELAUNCH_MIN_RUNTIME_MS;
+        const crashedAbruptly = exit_code === undefined || exit_code === null || exit_code !== 0;
+        const shouldRelaunch =
+          !wasUserStopped && crashedAbruptly && ranLongEnough && store.autoRelaunchSession;
+
+        if (shouldRelaunch && original) {
+          store.addNotification({
+            type: "info",
+            title: "Connection Lost",
+            message: `Mirroring for ${serial} dropped — trying to restore the session automatically.`,
+          });
+          store.addLog({
+            session_id: session_id,
+            serial,
+            level: "info",
+            message: `Session ended unexpectedly (exit code ${exit_code ?? "unknown"}). Scheduling auto-restore.`,
+            timestamp: new Date().toISOString(),
+          });
+          scheduleSessionRelaunch(serial, original.args.slice(2), 1);
+        } else {
+          store.addNotification({
+            type: status === "error" ? "error" : "info",
+            title: `Session ${status === "error" ? "Error" : "Finished"}`,
+            message: message || `Session for ${serial} ended.`,
+          });
+        }
+      }
+    });
+
+    return () => {
+      unlistenLogPromise.then((u) => u());
+      unlistenStatusPromise.then((u) => u());
+    };
+  }, []);
 }

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useAdb } from "../../hooks/useAdb";
 import { useScrcpy } from "../../hooks/useScrcpy";
 import { useDeviceStore } from "../../stores/deviceStore";
+import { useAppStore } from "../../stores/appStore";
 import {
   Smartphone,
   Tablet,
@@ -12,6 +13,7 @@ import {
   Trash2,
   PlugZap,
   Radio,
+  RefreshCcw,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -19,6 +21,10 @@ export const DevicesView: React.FC = () => {
   const { devices, savedDevices, connectDevice, removeSavedDevice } = useAdb();
   const { launchSession, stopSession, activeSessions } = useScrcpy();
   const { setPairingModalOpen, setTcpipModalOpen } = useDeviceStore();
+  const autoReconnectWireless = useDeviceStore((s) => s.autoReconnectWireless);
+  const setAutoReconnectWireless = useDeviceStore((s) => s.setAutoReconnectWireless);
+  const autoRelaunchSession = useAppStore((s) => s.autoRelaunchSession);
+  const setAutoRelaunchSession = useAppStore((s) => s.setAutoRelaunchSession);
 
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -58,6 +64,75 @@ export const DevicesView: React.FC = () => {
         <p className="text-sm font-semibold text-[#4E4633] max-w-2xl">
           Manage paired devices, connect new ones, and view connection history. Active devices appear first.
         </p>
+      </div>
+
+      {/* Auto-Reconnect Resilience Card */}
+      <div className="bg-[#E8F4FF] border-[3px] border-black rounded-2xl p-5 shadow-[4px_4px_0px_#000000]">
+        <div className="flex items-center gap-2 border-b-[2px] border-black/20 pb-2 mb-1">
+          <RefreshCcw className="w-4 h-4 text-[#1D4ED8]" />
+          <span className="font-extrabold text-xs uppercase tracking-wider text-[#1A1C1B]">
+            Auto-Reconnect
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div
+            onClick={() => setAutoReconnectWireless(!autoReconnectWireless)}
+            className={cn(
+              "flex items-start justify-between gap-3 p-3 rounded-xl border-[2.5px] border-black bg-white cursor-pointer select-none transition-all",
+              autoReconnectWireless ? "shadow-[3px_3px_0px_#000000]" : "opacity-70"
+            )}
+          >
+            <div className="space-y-0.5">
+              <div className="font-extrabold text-sm text-[#1A1C1B]">Wireless Devices</div>
+              <p className="text-[11px] font-semibold text-[#7F7660]">
+                Automatically run <span className="font-mono">adb connect</span> when a Wi-Fi device
+                drops or goes offline (retries for ~2 minutes).
+              </p>
+            </div>
+            <div
+              className={cn(
+                "relative inline-flex h-6 w-11 shrink-0 border-[2.5px] border-black rounded-full transition-colors mt-0.5",
+                autoReconnectWireless ? "bg-[#87F96E]" : "bg-[#DADAD8]"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-4 w-4 mt-[1px] transform rounded-full bg-white border-[2px] border-black transition-transform",
+                  autoReconnectWireless ? "translate-x-5" : "translate-x-[2px]"
+                )}
+              />
+            </div>
+          </div>
+
+          <div
+            onClick={() => setAutoRelaunchSession(!autoRelaunchSession)}
+            className={cn(
+              "flex items-start justify-between gap-3 p-3 rounded-xl border-[2.5px] border-black bg-white cursor-pointer select-none transition-all",
+              autoRelaunchSession ? "shadow-[3px_3px_0px_#000000]" : "opacity-70"
+            )}
+          >
+            <div className="space-y-0.5">
+              <div className="font-extrabold text-sm text-[#1A1C1B]">Mirroring Sessions</div>
+              <p className="text-[11px] font-semibold text-[#7F7660]">
+                Restore the scrcpy window automatically after an unexpected disconnect, once the
+                device is back online.
+              </p>
+            </div>
+            <div
+              className={cn(
+                "relative inline-flex h-6 w-11 shrink-0 border-[2.5px] border-black rounded-full transition-colors mt-0.5",
+                autoRelaunchSession ? "bg-[#87F96E]" : "bg-[#DADAD8]"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-4 w-4 mt-[1px] transform rounded-full bg-white border-[2px] border-black transition-transform",
+                  autoRelaunchSession ? "translate-x-5" : "translate-x-[2px]"
+                )}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Search & Actions Bar */}

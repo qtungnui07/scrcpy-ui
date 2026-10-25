@@ -6,6 +6,17 @@ import { useAppStore } from "../stores/appStore";
 
 const DEVICE_POLL_INTERVAL_MS = 5000;
 
+// Auto-reconnect tuning for wireless (Wi-Fi/TCP-IP) devices.
+const RECONNECT_MAX_ATTEMPTS = 8;
+const RECONNECT_RETRY_DELAY_MS = 15000;
+
+interface ReconnectState {
+  attempts: number;
+  lastAttempt: number;
+  /** Device is still listed by adb but in `offline` state; needs a disconnect+connect cycle. */
+  offline: boolean;
+}
+
 interface UseAdbOptions {
   /** Keep polling in exactly one app-level owner; consumers only use the shared store. */
   poll?: boolean;
@@ -27,8 +38,15 @@ export function useAdb({ poll = false }: UseAdbOptions = {}) {
   const { addNotification, addLog, binaryStatus } = useAppStore();
   const isPollingRef = useRef(false);
 
+  // Reconnect bookkeeping lives in refs because it is only meaningful to the
+  // single polling owner and must survive re-renders without triggering them.
+  const seenWirelessRef = useRef<Set<string>>(new Set());
+  const pendingReconnectRef = useRef<Map<string, ReconnectState>>(new Map());
+  const userDisconnectedRef = useRef<Set<string>>(new Set());
+  const gaveUpRef = useRef<Set<string>>(new Set());
+
   const refreshDevices = useCallback(async () => {
-    if (!binaryStatus?.adb_path) return [];
+    if (!binaryStatus?.adb_path) return null;
 
     try {
       const result = await invoke<AdbDevice[]>("get_adb_devices");
@@ -36,9 +54,167 @@ export function useAdb({ poll = false }: UseAdbOptions = {}) {
       return result;
     } catch (err: any) {
       console.warn("Failed to query adb devices:", err);
-      return [];
+      // null tells the poller the query itself failed; an empty array would
+      // otherwise be indistinguishable from "every device dropped".
+      return null;
     }
   }, [binaryStatus?.adb_path, setDevices]);
+
+  /**
+   * Runs on every poll sweep. Detects wireless devices that vanished or went
+   * `offline` since the previous sweep and quietly re-issues `adb connect`
+   * with a retry cap and backoff. Skips devices the user disconnected on
+   * purpose and resets its bookkeeping as soon as a device is healthy again.
+   */
+  const runReconnectSweep = useCallback(
+    async (current: AdbDevice[] | null) => {
+      if (current === null) return;
+
+      const { autoReconnectWireless } = useDeviceStore.getState();
+      const seen = seenWirelessRef.current;
+      const pending = pendingReconnectRef.current;
+      const userDisconnected = userDisconnectedRef.current;
+      const gaveUp = gaveUpRef.current;
+
+      const wirelessNow = current.filter((d) => d.connection_type === "Wireless");
+      const present = new Map(wirelessNow.map((d) => [d.serial, d]));
+
+      // Healthy again → clear all bookkeeping for that serial.
+      for (const [serial, state] of [...pending.entries()]) {
+        const dev = present.get(serial);
+        if (dev && dev.state === "device") {
+          pending.delete(serial);
+          gaveUp.delete(serial);
+          userDisconnected.delete(serial);
+          addLog({
+            session_id: "adb",
+            serial,
+            level: "info",
+            message: state.attempts > 0
+              ? `Wireless device ${serial} is back online after ${state.attempts} reconnect attempt(s).`
+              : `Wireless device ${serial} is online.`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      if (!autoReconnectWireless) {
+        pending.clear();
+        seen.clear();
+        for (const serial of wirelessNow.map((d) => d.serial)) seen.add(serial);
+        return;
+      }
+
+      // Mark wireless devices that disappeared since the last sweep.
+      for (const serial of seen) {
+        if (!present.has(serial) && !userDisconnected.has(serial) && !pending.has(serial)) {
+          pending.set(serial, { attempts: 0, lastAttempt: 0, offline: false });
+          addLog({
+            session_id: "adb",
+            serial,
+            level: "info",
+            message: `Lost wireless device ${serial} — auto-reconnect engaged.`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      // A wireless device stuck in `offline` state also needs a reconnect cycle.
+      for (const dev of wirelessNow) {
+        if (dev.state === "offline" && !userDisconnected.has(dev.serial) && !pending.has(dev.serial)) {
+          pending.set(dev.serial, { attempts: 0, lastAttempt: 0, offline: true });
+          addLog({
+            session_id: "adb",
+            serial: dev.serial,
+            level: "info",
+            message: `Wireless device ${dev.serial} is offline — auto-reconnect engaged.`,
+            timestamp: new Date().toISOString(),
+          });
+        } else if (dev.state === "offline") {
+          const state = pending.get(dev.serial);
+          if (state) state.offline = true;
+        }
+      }
+
+      seen.clear();
+      for (const serial of present.keys()) seen.add(serial);
+
+      const adbPath = useAppStore.getState().binaryStatus?.adb_path;
+      if (!adbPath || pending.size === 0) return;
+
+      for (const [serial, state] of pending) {
+        if (state.attempts >= RECONNECT_MAX_ATTEMPTS) {
+          pending.delete(serial);
+          if (!gaveUp.has(serial)) {
+            gaveUp.add(serial);
+            addNotification({
+              type: "warning",
+              title: "Auto-Reconnect Gave Up",
+              message: `Could not reach ${serial} after ${RECONNECT_MAX_ATTEMPTS} attempts. Reconnect manually from saved devices.`,
+            });
+            addLog({
+              session_id: "adb",
+              serial,
+              level: "error",
+              message: `Auto-reconnect failed for ${serial} after ${RECONNECT_MAX_ATTEMPTS} attempts.`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          continue;
+        }
+
+        const elapsed = Date.now() - state.lastAttempt;
+        if (state.lastAttempt !== 0 && elapsed < RECONNECT_RETRY_DELAY_MS) continue;
+
+        state.attempts += 1;
+        state.lastAttempt = Date.now();
+
+        const [ip, portStr] = serial.split(":");
+        const port = Number.parseInt(portStr, 10) || 5555;
+
+        try {
+          if (state.offline) {
+            // Stale adb entry: drop it first or `connect` may report "already connected".
+            await invoke<CommandOutput>("disconnect_wireless_device", { target: serial });
+          }
+          const res = await invoke<CommandOutput>("connect_wireless_device", { ip, port });
+          if (res.success) {
+            pending.delete(serial);
+            addNotification({
+              type: "success",
+              title: "Device Reconnected",
+              message: `Wireless device ${serial} is back online (attempt ${state.attempts}).`,
+            });
+            addLog({
+              session_id: "adb",
+              serial,
+              level: "info",
+              message: `Auto-reconnect succeeded: ${res.stdout || `connected to ${serial}`}`,
+              timestamp: new Date().toISOString(),
+            });
+            await refreshDevices();
+          } else {
+            addLog({
+              session_id: "adb",
+              serial,
+              level: "info",
+              message: `Reconnect attempt ${state.attempts}/${RECONNECT_MAX_ATTEMPTS} failed: ${res.stdout || res.stderr || "no response"}`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch (err: any) {
+          addLog({
+            session_id: "adb",
+            serial,
+            level: "error",
+            message: `Reconnect attempt ${state.attempts}/${RECONNECT_MAX_ATTEMPTS} error: ${String(err)}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    },
+    [addNotification, addLog, refreshDevices]
+  );
 
   // Device discovery must have a single owner. Several screens (and the always-mounted
   // wireless dialog) use this hook, so polling from every hook instance floods ADB while
@@ -50,17 +226,18 @@ export function useAdb({ poll = false }: UseAdbOptions = {}) {
       if (isPollingRef.current) return;
       isPollingRef.current = true;
       try {
-        await refreshDevices();
+        const result = await refreshDevices();
+        await runReconnectSweep(result);
       } finally {
         isPollingRef.current = false;
       }
     }, DEVICE_POLL_INTERVAL_MS);
 
     // Initial immediate fetch
-    refreshDevices();
+    refreshDevices().then((result) => runReconnectSweep(result));
 
     return () => clearInterval(interval);
-  }, [poll, isPollingActive, binaryStatus?.adb_path, refreshDevices]);
+  }, [poll, isPollingActive, binaryStatus?.adb_path, refreshDevices, runReconnectSweep]);
 
   const pairDevice = useCallback(
     async (ip: string, port: number, code: string) => {
@@ -122,6 +299,10 @@ export function useAdb({ poll = false }: UseAdbOptions = {}) {
 
   const connectDevice = useCallback(
     async (ip: string, port: number = 5555, alias?: string) => {
+      // Manual connect clears any "user disconnected on purpose" marker so the
+      // auto-reconnect sweep resumes watching this serial.
+      userDisconnectedRef.current.delete(`${ip}:${port}`);
+      gaveUpRef.current.delete(`${ip}:${port}`);
       try {
         addLog({
           session_id: "adb",
@@ -182,6 +363,9 @@ export function useAdb({ poll = false }: UseAdbOptions = {}) {
 
   const disconnectDevice = useCallback(
     async (target: string) => {
+      // Remember the intent so the reconnect sweep does not undo it.
+      userDisconnectedRef.current.add(target);
+      pendingReconnectRef.current.delete(target);
       try {
         const res = await invoke<CommandOutput>("disconnect_wireless_device", { target });
         addNotification({

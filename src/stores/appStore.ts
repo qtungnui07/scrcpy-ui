@@ -22,6 +22,7 @@ interface AppStore {
   activeTab: TabType;
   theme: "dark" | "light";
   notifications: AppNotification[];
+  autoRelaunchSession: boolean;
 
   setBinaryStatus: (status: BinaryStatus | null) => void;
   setReleaseInfo: (info: ReleaseInfo | null) => void;
@@ -36,8 +37,20 @@ interface AppStore {
   setActiveTab: (tab: TabType) => void;
   toggleTheme: () => void;
   setTheme: (theme: "dark" | "light") => void;
+  setAutoRelaunchSession: (enabled: boolean) => void;
   addNotification: (notification: Omit<AppNotification, "id" | "timestamp">) => void;
   removeNotification: (id: string) => void;
+}
+
+const AUTO_RELAUNCH_KEY = "scrcpy_hub_auto_relaunch_session";
+
+function loadAutoRelaunch(): boolean {
+  try {
+    const stored = localStorage.getItem(AUTO_RELAUNCH_KEY);
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -51,6 +64,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   activeTab: "devices",
   theme: (localStorage.getItem("scrcpy_hub_theme") as "dark" | "light") || "dark",
   notifications: [],
+  autoRelaunchSession: loadAutoRelaunch(),
 
   setBinaryStatus: (status) => set({ binaryStatus: status }),
   setReleaseInfo: (info) => set({ releaseInfo: info }),
@@ -100,6 +114,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       document.documentElement.classList.remove("dark");
     }
     set({ theme });
+  },
+
+  setAutoRelaunchSession: (enabled) => {
+    try {
+      localStorage.setItem(AUTO_RELAUNCH_KEY, String(enabled));
+    } catch (e) {
+      console.error(e);
+    }
+    set({ autoRelaunchSession: enabled });
   },
 
   addNotification: (notif) => {

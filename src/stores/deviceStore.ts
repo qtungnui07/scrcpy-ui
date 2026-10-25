@@ -9,12 +9,14 @@ interface DeviceStore {
   isTcpipModalOpen: boolean;
   activeDeviceIdForTcpip: string | null;
   isPollingActive: boolean;
+  autoReconnectWireless: boolean;
 
   setDevices: (devices: AdbDevice[]) => void;
   setSelectedSerial: (serial: string | null) => void;
   setPairingModalOpen: (open: boolean) => void;
   setTcpipModalOpen: (open: boolean, serial?: string | null) => void;
   setPollingActive: (active: boolean) => void;
+  setAutoReconnectWireless: (enabled: boolean) => void;
 
   // Bookmarking & Saved Devices
   saveDevice: (device: Omit<SavedDevice, "id">) => void;
@@ -24,6 +26,16 @@ interface DeviceStore {
 
 const SAVED_DEVICES_KEY = "scrcpy_hub_saved_devices";
 const DEVICE_ALIASES_KEY = "scrcpy_hub_device_aliases";
+const AUTO_RECONNECT_KEY = "scrcpy_hub_auto_reconnect_wireless";
+
+function loadAutoReconnect(): boolean {
+  try {
+    const stored = localStorage.getItem(AUTO_RECONNECT_KEY);
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+}
 
 function loadSavedDevices(): SavedDevice[] {
   try {
@@ -51,6 +63,7 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   isTcpipModalOpen: false,
   activeDeviceIdForTcpip: null,
   isPollingActive: true,
+  autoReconnectWireless: loadAutoReconnect(),
 
   setDevices: (rawDevices) => {
     const aliases = loadAliases();
@@ -86,6 +99,15 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
   setTcpipModalOpen: (open, serial = null) =>
     set({ isTcpipModalOpen: open, activeDeviceIdForTcpip: serial }),
   setPollingActive: (active) => set({ isPollingActive: active }),
+
+  setAutoReconnectWireless: (enabled) => {
+    try {
+      localStorage.setItem(AUTO_RECONNECT_KEY, String(enabled));
+    } catch (e) {
+      console.error(e);
+    }
+    set({ autoReconnectWireless: enabled });
+  },
 
   saveDevice: (device) => {
     const current = get().savedDevices;

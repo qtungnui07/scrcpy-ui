@@ -13,6 +13,7 @@ A modern, high-performance desktop GUI wrapper for [Genymobile Scrcpy](https://g
 - **🔌 Multi-Device Discovery:**
   - Auto-polls USB and Wi-Fi devices every 2s (`adb devices -l`).
   - Animated live status badges: `Active / Connected`, `Unauthorized`, `Offline`.
+  - **Auto-Reconnect:** lost Wi-Fi devices are automatically re-connected (`adb connect`) with retry backoff, and mirroring sessions killed by an unexpected disconnect are restored with their original settings once the device is back online (both toggleable in Device Management).
 - **📶 Wireless Pairing Wizard (Android 11+ & Legacy TCP/IP):**
   - **Android 11+:** 2-step pairing wizard with 6-digit pair code verification (`adb pair` & `adb connect`).
   - **Legacy TCP/IP:** 1-click automatic Wi-Fi IP detection and switch from USB to wireless mode (`adb tcpip 5555`).
