@@ -30,13 +30,29 @@ pub fn get_platform_info() -> PlatformInfo {
 }
 
 pub fn get_bin_dir() -> PathBuf {
-    // 1. Check local bin folder next to executable, cwd, or parent of cwd
+    // 1. Check an existing `bin` folder next to the cwd or the executable.
+    //    Installed apps can be launched with an unrelated cwd (e.g. System32),
+    //    so the executable directory is just as important as cwd for finding
+    //    binaries bundled with or previously downloaded by the app.
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
     if let Ok(cwd) = env::current_dir() {
-        for dir in [cwd.as_path(), cwd.parent().unwrap_or(cwd.as_path())] {
-            let local_bin = dir.join("bin");
-            if local_bin.exists() {
-                return local_bin;
+        search_dirs.push(cwd.clone());
+        if let Some(parent) = cwd.parent() {
+            search_dirs.push(parent.to_path_buf());
+        }
+    }
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            search_dirs.push(exe_dir.to_path_buf());
+            if let Some(parent) = exe_dir.parent() {
+                search_dirs.push(parent.to_path_buf());
             }
+        }
+    }
+    for dir in search_dirs {
+        let local_bin = dir.join("bin");
+        if local_bin.exists() {
+            return local_bin;
         }
     }
 

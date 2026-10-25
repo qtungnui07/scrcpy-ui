@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,25 +60,26 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
+/// Serializes engine downloads: two concurrent invocations (e.g. the startup
+/// auto-check racing a manual install) extracting into the same bin dir
+/// corrupt files on Windows and leave the engine "not found".
+static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tauri::command]
 pub async fn get_binary_status() -> Result<BinaryStatus, String> {
     let bin_dir = get_bin_dir();
     let scrcpy_path = resolve_binary("scrcpy");
     let adb_path = resolve_binary("adb");
 
-    let scrcpy_version = scrcpy_path.as_ref().and_then(|path| {
-        let output = Command::new(path).arg("--version").output().ok()?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let first_line = stdout.lines().next().unwrap_or("scrcpy");
-        Some(first_line.trim().to_string())
-    });
+    let scrcpy_version = match &scrcpy_path {
+        Some(path) => get_version_line(path, &["--version"]).await,
+        None => None,
+    };
 
-    let adb_version = adb_path.as_ref().and_then(|path| {
-        let output = Command::new(path).arg("version").output().ok()?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let first_line = stdout.lines().next().unwrap_or("adb");
-        Some(first_line.trim().to_string())
-    });
+    let adb_version = match &adb_path {
+        Some(path) => get_version_line(path, &["version"]).await,
+        None => None,
+    };
 
     let is_ready = scrcpy_path.is_some() && adb_path.is_some();
     let installed_tag = read_installed_tag(&bin_dir);
@@ -93,6 +93,25 @@ pub async fn get_binary_status() -> Result<BinaryStatus, String> {
         bin_dir: bin_dir.to_string_lossy().to_string(),
         installed_tag,
     })
+}
+
+async fn get_version_line(binary: &Path, args: &[&str]) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.args(args);
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd.output().await.ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
 }
 
 #[tauri::command]
@@ -155,6 +174,10 @@ pub async fn download_and_extract_engine(
     app: AppHandle,
     download_url: Option<String>,
 ) -> Result<BinaryStatus, String> {
+    // Hold the global lock for the whole download+extract; queued callers
+    // simply run after the first one finishes.
+    let _guard = DOWNLOAD_LOCK.lock().await;
+
     let target_url = match download_url {
         Some(url) => url,
         None => {

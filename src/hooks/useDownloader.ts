@@ -1,8 +1,14 @@
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BinaryStatus, ReleaseInfo, DownloadProgressPayload, UpdateCheckResult } from "../types";
 import { useAppStore } from "../stores/appStore";
+
+// App, SettingsView and BinaryStatusCard all mount this hook. The startup
+// auto-check must run exactly once per app session — two concurrent engine
+// downloads extracting into the same bin dir corrupt the binaries and leave
+// a fresh install "scrcpy not found".
+let autoCheckStarted = false;
 
 export function useDownloader() {
   const {
@@ -151,20 +157,23 @@ export function useDownloader() {
         message: `Auto-update check failed: ${err}`,
         timestamp: new Date().toISOString(),
       });
+      addNotification({
+        type: "error",
+        title: "Engine Check Failed",
+        message: `Could not check for the scrcpy engine: ${String(err)}. Use "1-Click Auto Install" to retry.`,
+      });
     } finally {
       setIsDownloading(false);
       setDownloadProgress(null);
     }
   }, [setIsDownloading, setDownloadProgress, addNotification, addLog, fetchStatus]);
 
-  const hasCheckedRef = useRef(false);
-
   useEffect(() => {
     fetchStatus();
 
-    // Auto-check for updates on first mount
-    if (!hasCheckedRef.current) {
-      hasCheckedRef.current = true;
+    // Auto-check for updates once per app session (module-level flag)
+    if (!autoCheckStarted) {
+      autoCheckStarted = true;
       checkAndAutoUpdate();
     }
 

@@ -1,8 +1,10 @@
 import React from "react";
 import { useAdb } from "../../hooks/useAdb";
 import { useScrcpy } from "../../hooks/useScrcpy";
+import { useDownloader } from "../../hooks/useDownloader";
 import { useDeviceStore } from "../../stores/deviceStore";
 import { useConfigStore } from "../../stores/configStore";
+import { useAppStore } from "../../stores/appStore";
 import { QuickActionsBar } from "../session/QuickActionsBar";
 import {
   Smartphone,
@@ -14,6 +16,8 @@ import {
   RefreshCw,
   Video,
   AlertTriangle,
+  Download,
+  Cpu,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -22,12 +26,80 @@ export const DashboardView: React.FC = () => {
   const { setSelectedSerial, setPairingModalOpen } = useDeviceStore();
   const { launchSession, stopSession, activeSessions } = useScrcpy();
   const { config, updateConfig } = useConfigStore();
+  const binaryStatus = useAppStore((s) => s.binaryStatus);
+  const downloadProgress = useAppStore((s) => s.downloadProgress);
+  const isDownloading = useAppStore((s) => s.isDownloading);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const { downloadEngine } = useDownloader();
   const [isRefreshing, setIsRefreshing] = React.useState(false);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await refreshDevices();
     setIsRefreshing(false);
+  };
+
+  const engineReady = binaryStatus?.is_ready ?? false;
+
+  const renderEngineBanner = () => {
+    if (engineReady) return null;
+
+    if (isDownloading && downloadProgress) {
+      return (
+        <div className="bg-[#FFF3C4] border-[3px] border-black rounded-2xl p-5 shadow-[4px_4px_0px_#000000] space-y-2">
+          <div className="flex justify-between items-center font-extrabold text-xs uppercase text-[#1A1C1B]">
+            <span className="flex items-center gap-2">
+              <Download className="w-4 h-4 animate-bounce" />
+              {downloadProgress.message}
+            </span>
+            <span className="font-mono">{downloadProgress.progress.toFixed(0)}%</span>
+          </div>
+          <div className="w-full bg-white border-[2.5px] border-black h-4 rounded-full overflow-hidden">
+            <div
+              className="bg-[#FFD027] h-full transition-all"
+              style={{ width: `${Math.max(5, downloadProgress.progress)}%` }}
+            />
+          </div>
+          <p className="text-[11px] font-bold text-[#7F7660]">
+            ScrcpyHub is downloading the scrcpy &amp; adb engine in the background. Device
+            discovery will start automatically once it finishes.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="bg-[#FFDAD6] border-[3px] border-black rounded-2xl p-5 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row md:items-center gap-4">
+        <div className="p-3 bg-white border-[2.5px] border-black rounded-xl shadow-[2px_2px_0px_#000000] shrink-0 w-fit">
+          <Cpu className="w-6 h-6 text-[#BA1A1A]" />
+        </div>
+        <div className="flex-1 space-y-1">
+          <h3 className="font-extrabold text-sm uppercase text-[#BA1A1A]">
+            scrcpy Engine Not Installed
+          </h3>
+          <p className="text-xs font-bold text-[#93000A] leading-relaxed">
+            {binaryStatus === null
+              ? "Checking for the scrcpy & adb engine..."
+              : "ScrcpyHub could not find scrcpy or adb on this machine. Install the engine (one click, downloaded from the official GitHub release) to enable device discovery and mirroring."}
+          </p>
+        </div>
+        <div className="flex gap-3 shrink-0">
+          <button
+            onClick={() => downloadEngine()}
+            className="bg-[#87F96E] border-[3px] border-black px-5 py-3 rounded-xl font-extrabold uppercase text-xs shadow-[4px_4px_0px_#000000] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_#000000] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all flex items-center gap-2 text-black cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            Install Engine
+          </button>
+          <button
+            onClick={() => setActiveTab("engine")}
+            className="bg-white border-[3px] border-black px-5 py-3 rounded-xl font-extrabold uppercase text-xs shadow-[4px_4px_0px_#000000] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_#000000] transition-all flex items-center gap-2 text-black cursor-pointer"
+          >
+            Engine Settings
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -62,6 +134,9 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Engine Status Banner (fresh install / missing binaries) */}
+      {renderEngineBanner()}
 
       {/* Floating Controller for Selected Device */}
       <QuickActionsBar />
